@@ -122,7 +122,28 @@ def save_figure(tbs,f, name_base):
     ts = "{}{:02d}{:02d}".format(st.year, st.month, st.day)
     f.savefig('/Users/htelg/projecte/17_ICARUS_aerosol_cloud_interaction/all_flights_figures/{}_{}.png'.format(name_base,ts))
 
-def plot_on_clouds(tbs, cpc = True, relative_humidity = True, timestamp = True, altitude_column = 'Altitude_iMet', which_pops = 'wet', cloud_vmin = 1e2, linewidth = 3.5):
+def plot_on_clouds(tbs, cpc = True, relative_humidity = True, cloudbase = True, timestamp = True, altitude_column = 'Altitude_iMet', which_pops = 'wet', which_pops_data = 'raw', cloud_vmin = 1e2, linewidth = 3.5):
+    """
+
+    Parameters
+    ----------
+    tbs
+    cpc
+    relative_humidity
+    cloudbase: bool
+        if cloudbase (from ceilometer) is to be plotted
+    timestamp
+    altitude_column
+    which_pops
+    which_pops_data: ['raw'], 'qc'
+        if nc from the raw data or the qc data
+    cloud_vmin
+    linewidth
+
+    Returns
+    -------
+
+    """
     bsts = tbs.ceilometer.backscatter.get_timespan()
     tsts = tbs.data_ts.get_timespan()
     if not ((bsts[1] > tsts[0]) and (tsts[1] > bsts[0])):
@@ -135,6 +156,22 @@ def plot_on_clouds(tbs, cpc = True, relative_humidity = True, timestamp = True, 
     ts = tbs.data_ts.average_time((10, 's'))
     time = ts.data.index.values
     altitude = ts.data[altitude_column].values
+
+    ###################
+    # the clouds
+    for at in aa:
+        if tbs.kazr:
+            tbs.kazr.reflectivity.plot(snr_max=10, ax=at, zorder=0)
+            if cloudbase:
+                tbs.ceilometer.cloudbase.plot(ax=at, zorder=5, color = _plt.rcParams['axes.prop_cycle'].by_key()['color'][1])
+                g = at.get_lines()[-1]
+                g.set_markersize(3)
+                g.set_markeredgewidth(0.8)
+        else:
+            f, a, pc, cb = bs.plot(ax=at, cb_kwargs=False)
+            pc.set_cmap(_plt_tools.colormap.my_colormaps.clouds())
+            pc.set_norm(_LogNorm())
+            pc.set_clim(vmin=cloud_vmin)  # , vmax= 1e4)
     ###################
     # relative humidity
     if not relative_humidity:
@@ -143,20 +180,18 @@ def plot_on_clouds(tbs, cpc = True, relative_humidity = True, timestamp = True, 
         lc,cb = None,None
         a = a_rh
     else:
-        f,a,pc,cb = bs.plot(ax = a_rh, cb_kwargs=False)
-        # f.set_figwidth(f.get_figwidth() * 2)
-        pc.set_cmap(_plt_tools.colormap.my_colormaps.clouds())
-        pc.set_norm(_LogNorm())
-        pc.set_clim(vmin = cloud_vmin)#, vmax= 1e4)
-        # f.colorbar(pc)
-    #     a.set_ylim(top=alt_max)
+        # f,a,pc,cb = bs.plot(ax = a_rh, cb_kwargs=False)
+        # pc.set_cmap(_plt_tools.colormap.my_colormaps.clouds())
+        # pc.set_norm(_LogNorm())
+        # pc.set_clim(vmin = cloud_vmin)#, vmax= 1e4)
 
 
 
         RH = ts.data['iMet_iMet humidity [RH %]'].values
-        a,lc,cb = _plt_tools.plot.plot_gradiant_color(time, altitude, RH, ax = a, colorbar=False)
+        a,lc,cb = _plt_tools.plot.plot_gradiant_color(time, altitude, RH, ax = a_rh, colorbar=False)
         lc.set_cmap(_plt_tools.colormap.my_colormaps.relative_humidity())
         lc.set_linewidth(linewidth)
+        lc.set_zorder(50)
         lc.set_clim(0, 100)
 
         cb, cax = _plt_tools.colorbar.colorbar_axis_split_off(lc, a)
@@ -166,18 +201,14 @@ def plot_on_clouds(tbs, cpc = True, relative_humidity = True, timestamp = True, 
         # cax.yaxis.set_major_locator()
     set_rh = (a, lc, cb)
 
-    ###################
-    # Temperature
-    f,a,pc,cb = bs.plot(ax = a_t, cb_kwargs=False)
-    pc.set_cmap(_plt_tools.colormap.my_colormaps.clouds())
-    pc.set_norm(_LogNorm())
-    pc.set_clim(vmin = cloud_vmin)#, vmax= 1e4)
-#     a.set_ylim(top=alt_max)
+###################
+# Temperature
 
     temp = ts.data['iMet_iMet air temperature (corrected) [deg C]'].values
-    a,lc,cb = _plt_tools.plot.plot_gradiant_color(time, altitude, temp, ax = a, colorbar=False)
+    a,lc,cb = _plt_tools.plot.plot_gradiant_color(time, altitude, temp, ax = a_t, colorbar=False)
     lc.set_cmap(_plt_tools.colormap.my_colormaps.relative_humidity(reverse=True))
     lc.set_linewidth(linewidth)
+    lc.set_zorder(50)
     lc.set_clim(_np.nanmin(temp),_np.nanmax(temp))
 
     cb, cax = _plt_tools.colorbar.colorbar_axis_split_off(lc, a)
@@ -186,22 +217,25 @@ def plot_on_clouds(tbs, cpc = True, relative_humidity = True, timestamp = True, 
     cax.set_ylabel('Temp (°C)', labelpad=0.5)
     set_t = (a,lc,cb)
 
-    ##################
-    # POPS number concentration
-    f,a,pc,cb = bs.plot(ax = a_nc)
-    pc.set_cmap(_plt_tools.colormap.my_colormaps.clouds())
-    pc.set_norm(_LogNorm())
-    pc.set_clim(vmin = cloud_vmin)#, vmax= 1e4)
-#     a.set_ylim(top=alt_max)
+##################
+# POPS number concentration
 
     if which_pops == 'wet':
-        column = 'POPSwet_PartCon_fromsizedist'
+        if which_pops_data == 'qc':
+            column = "N_POPS2"
+        elif which_pops_data == 'raw':
+            column = 'POPSwet_PartCon_fromsizedist'
     if which_pops == 'dry':
-        column = 'POPSdry_PartCon_fromsizedist'
+        if which_pops_data == 'qc':
+            column = "N_POPS1"
+        elif which_pops_data == 'raw':
+            column = 'POPSdry_PartCon_fromsizedist'
+
     nc = ts.data[column]
-    a,lc,cb = _plt_tools.plot.plot_gradiant_color(time, altitude, nc, ax = a, colorbar=False)
+    a,lc,cb = _plt_tools.plot.plot_gradiant_color(time, altitude, nc, ax = a_nc, colorbar=False)
     lc.set_cmap(_plt_tools.colormap.my_colormaps.relative_humidity(reverse=True))
     lc.set_linewidth(linewidth)
+    lc.set_zorder(50)
     lc.set_linestyle('-')
 
     cb, cax = _plt_tools.colorbar.colorbar_axis_split_off(lc, a)
@@ -210,19 +244,20 @@ def plot_on_clouds(tbs, cpc = True, relative_humidity = True, timestamp = True, 
     cax.set_ylabel('NC$_{POPS}$ (#/cm$^3$)', labelpad=0.5)
     set_nc = (a, lc, cb)
 
-    ###################
-    # CPC
+###################
+# CPC
 
-    f, a, pc, cb = bs.plot(ax=a_cpc, cb_kwargs=False)
-    pc.set_cmap(_plt_tools.colormap.my_colormaps.clouds())
-    pc.set_norm(_LogNorm())
-    pc.set_clim(vmin=cloud_vmin)  # , vmax= 1e4)
+    # f, a, pc, cb = bs.plot(ax=a_cpc, cb_kwargs=False)
+    # pc.set_cmap(_plt_tools.colormap.my_colormaps.clouds())
+    # pc.set_norm(_LogNorm())
+    # pc.set_clim(vmin=cloud_vmin)  # , vmax= 1e4)
     if cpc:
         cpc = ts.data['CPC_Concentration (#/cm³)'].values
 
-        a, lc, cb = _plt_tools.plot.plot_gradiant_color(time[~ _np.isnan(cpc)], altitude[~ _np.isnan(cpc)], cpc[~ _np.isnan(cpc)], ax=a, colorbar=False)
+        a, lc, cb = _plt_tools.plot.plot_gradiant_color(time[~ _np.isnan(cpc)], altitude[~ _np.isnan(cpc)], cpc[~ _np.isnan(cpc)], ax=a_cpc, colorbar=False)
         lc.set_cmap(_plt_tools.colormap.my_colormaps.relative_humidity(reverse=True))
         lc.set_linewidth(linewidth)
+        lc.set_zorder(50)
         lc.set_clim(_np.nanmin(cpc), _np.nanmax(cpc))
         lc.set_norm(_LogNorm())
 
@@ -287,7 +322,7 @@ def plot_on_clouds(tbs, cpc = True, relative_humidity = True, timestamp = True, 
 
     return f, sets
 
-def plot_on_clouds_flightpath(tbs, cloud_vmin = 100, altitude_column = 'Altitude_iMet', mode = None):
+def plot_on_clouds_flightpath(tbs, cloud_vmin = 100, altitude_column = 'Altitude_iMet', mode = None, ax = None, times_of_interest = None):
     """
 
     Parameters
@@ -303,24 +338,27 @@ def plot_on_clouds_flightpath(tbs, cloud_vmin = 100, altitude_column = 'Altitude
 
     bsts = tbs.ceilometer.backscatter.get_timespan()
     tsts = tbs.data_ts.get_timespan()
+
     if not ((bsts[1] > tsts[0]) and (tsts[1] > bsts[0])):
         raise ValueError('there is no overlap of the tbs and the ceilometer data!')
 
-    f,a = _plt.subplots()
-    if tbs.kazar:
-        tbs.kazr.reflectivity.plot(snr_max=10, ax=a)
-        tbs.ceilometer.cloudbase.plot(ax=a)
-        g = a.get_lines()[-1]
-        g.set_markersize(5)
-        g.set_markeredgewidth(1.5)
+    if ax:
+        a = ax
+        f = a.get_figure()
     else:
-        tbs.ceilometer.backscatter.plot(ax = a, vmin=cloud_vmin)
+        f,a = _plt.subplots()
+
+    a.plot(tbs.data_ts.data.index, tbs.data_ts.data[altitude_column], zorder = 10)
+    if tbs.kazr:
+        tbs.kazr.reflectivity.plot(snr_max=10, ax=a, zorder = 0, times_of_interest = times_of_interest)
+        tbs.ceilometer.cloudbase.plot(ax=a, zorder = 5)
+        g = a.get_lines()[-1]
+        g.set_markersize(3)
+        g.set_markeredgewidth(0.8)
+    else:
+        tbs.ceilometer.backscatter.plot(ax = a, vmin=cloud_vmin, times_of_interest = times_of_interest)
     # tbs.data_ts.data[altitude_column].plot(ax = a)
 
-
-
-
-    a.plot(tbs.data_ts.data.index, tbs.data_ts.data[altitude_column])
     a.xaxis.set_major_formatter(_DateFormatter("%H:%M:%S"))
     a.set_xlabel('')
 
@@ -398,22 +436,34 @@ class Sections(object):
 
         maxs = []
         mins = []
-        if show_clouds:
-            self._parent.ceilometer.backscatter.plot(ax = a, zorder = 0)
+
         for e,att in enumerate(dir(self)):
+            zo = e + 10
             if att[0] == '_' or att in ['sections_dict','plot', 'plot_avg_sd']:
                 continue
             if att in exclude:
                 continue
             sect = getattr(self, att)
             # sect.data_ts.data[altitude_column].plot(ax=a, label=att)
-            a.plot(sect.data_ts.data.index.values, sect.data_ts.data[altitude_column].values, label = att, zorder = e+1)
+            a.plot(sect.data_ts.data.index.values, sect.data_ts.data[altitude_column].values, label = att, zorder = zo)
             a.legend(loc = 1)
             maxs.append(sect.data_ts.data[altitude_column].max())
             mins.append(sect.data_ts.data[altitude_column].min())
 
-        g, = a.plot(self._parent.data_ts.data.index, self._parent.data_ts.data[altitude_column], lw=0.8, ls=':', zorder = 1)
+        g, = a.plot(self._parent.data_ts.data.index, self._parent.data_ts.data[altitude_column], lw=0.8, ls=':', zorder = 2)
         g.set_color('black')
+
+        if show_clouds:
+            if self._parent.kazr:
+                self._parent.kazr.reflectivity.plot(snr_max=10, ax=a, zorder=0)
+                self._parent.ceilometer.cloudbase.plot(ax=a, zorder=1)
+                g = a.get_lines()[-1]
+                g.set_markersize(3)
+                g.set_markeredgewidth(0.8)
+                g.set_markeredgecolor('r')
+            else:
+                self._parent.ceilometer.backscatter.plot(ax = a, zorder = 0)
+
         # g.set_zorder(0)
         if timestamp:
             at = a
@@ -522,6 +572,7 @@ class TBS_flight(object):
         self.sections = Sections(self)
         self._resolution = None
         self._std = None
+        self.version = 1 # 1 for early work will be changed accordingly in newer versions when data is loaded
 
 
     # @property
@@ -877,7 +928,7 @@ class TBS_flight(object):
     plot_on_clouds_flightpath = plot_on_clouds_flightpath
 
 
-    def plot_overview_ts(self, alt_lim = (None, None), cpc_lim = (None, None), figh_hight_scale = 1.5):
+    def plot_overview_ts(self, alt_lim = (None, None), cpc_lim = (None, None), figh_hight_scale = 1.5, which_pops_data = 'raw'):
 
         f ,a = _plt.subplots(5, sharex=True, gridspec_kw={'hspace': 0})
         f.set_figheight(f.get_figheight() * figh_hight_scale)
@@ -891,7 +942,7 @@ class TBS_flight(object):
         # at.set_title('Overview time series')
 
         if 1:
-            # cpc
+    # cpc
             if self.cpc_raw:
                 self.data_ts.data['CPC_Concentration (#/cm³)'].plot(ax = a_cpc)
                 a_cpc.set_yscale('log')
@@ -899,7 +950,7 @@ class TBS_flight(object):
             a_cpc.set_ylabel('CPC (#/cm^3)')
 
 
-            # altitude
+    # altitude
             if self.imet_raw:
                 self.data_ts.data.Altitude_iMet.plot(ax = a_alt, label ='iMet')
             self.data_ts.data['POPSdry_Altitude'].plot(ax = a_alt, label ='POPS_dry')
@@ -908,18 +959,24 @@ class TBS_flight(object):
             a_alt.set_ylim(alt_lim)
             a_alt.legend(loc = 1)
 
-        # particle number
-        if self.dist_dry:
-           self.data_ts.data.POPSdry_PartCon_fromsizedist.plot(ax=a_nc, label='dry')
-        if self.dist_wet:
-            self.data_ts.data.POPSwet_PartCon_fromsizedist.plot(ax=a_nc, label='wet')
+    # POPS particle number
+        if which_pops_data == 'raw':
+            if self.dist_dry:
+               self.data_ts.data.POPSdry_PartCon_fromsizedist.plot(ax=a_nc, label='dry')
+
+            if self.dist_wet:
+                self.data_ts.data.POPSwet_PartCon_fromsizedist.plot(ax=a_nc, label='wet')
+
+        if which_pops_data == 'qc':
+            self.data_ts.data.N_POPS1.plot(ax = a_nc, label = 'dry')
+            self.data_ts.data.N_POPS2.plot(ax=a_nc, label='wet')
         # self.data_ts.data.POPSdry_PartCon.plot(ax = a_nc, label ='dry')
         # self.data_ts.data.POPSwet_PartCon.plot(ax = a_nc, label ='wet')
         a_nc.set_ylabel('POPS NC (#/cm^3)')
         a_nc.set_yscale('log')
         a_nc.legend()
 
-        # temperatur
+    # temperatur
         if self.imet_raw:
             self.data_ts.data['iMet_iMet air temperature (corrected) [deg C]'].plot(ax = a_t, label ='iMet')
         self.data_ts.data.POPSdry_Temp.plot(ax = a_t, label ='POPS_dry')
@@ -927,12 +984,17 @@ class TBS_flight(object):
         a_t.set_ylabel('Temp (°C)')
         a_t.legend()
 
-        # RH
+    # RH
         if self.imet_raw:
             self.data_ts.data['iMet_iMet humidity [RH %]'].plot(ax = a_rh)
+
+        if self.version > 1:
+            self.data_ts.data.RH.plot(ax = a_rh)
+
+
         a_rh.set_ylabel('RH (%)')
 
-        # other stuff
+    # other stuff
         for at in a:
             scale = at.get_yscale()
             if scale == 'linear':
@@ -1144,6 +1206,7 @@ class TBS_flight(object):
         up and down are different. To see a vertical profile that is produced by binning the data into altitude bins
         use plot_overview_vp"""
 
+        colors = _plt.rcParams['axes.prop_cycle'].by_key()['color']
         f ,a = _plt.subplots(1, 5, sharey=True, gridspec_kw={'wspace': 0})
         f.set_figwidth(f.get_figwidth() * fighwidthscale)
         #     a_alt = a[0]
@@ -1173,25 +1236,34 @@ class TBS_flight(object):
 
 
     # particle number
-        column_dry = 'POPSdry_PartCon_fromsizedist' #'POPSdry_PartCon'
-        column_wet = 'POPSwet_PartCon_fromsizedist' #'POPSwet_PartCon'
-        altitude = self.data_ts.data.Altitude_POPSdry
-        altitude_avg = data_avg.data.Altitude_POPSdry
-        altitudeII = self.data_ts.data.Altitude_POPSwet
-        altitude_avgII = data_avg.data.Altitude_POPSwet
-        if self.dist_dry:
+        if self.version == 1:
+            column_dry = 'POPSdry_PartCon_fromsizedist' #'POPSdry_PartCon'
+            column_wet = 'POPSwet_PartCon_fromsizedist' #'POPSwet_PartCon'
+            altitude = self.data_ts.data.Altitude_POPSdry
+            altitude_avg = data_avg.data.Altitude_POPSdry
+            altitudeII = self.data_ts.data.Altitude_POPSwet
+            altitude_avgII = data_avg.data.Altitude_POPSwet
+        elif self.version > 1:
+            column_dry = 'N_POPS1'  # 'POPSdry_PartCon'
+            column_wet = 'N_POPS2'  # 'POPSwet_PartCon'
+            altitude = self.data_ts.data.Altitude_iMet
+            altitude_avg = data_avg.data.Altitude_iMet
+            altitudeII = self.data_ts.data.Altitude_iMet
+            altitude_avgII = data_avg.data.Altitude_iMet
+
+        if self.dist_dry or self.version >1:
             a_nc.plot(self.data_ts.data[column_dry], altitude, alpha = alpha)
             g = a_nc.get_lines()[-1]
             g.set_label(None)
             col1 = g.get_color()
-        if self.dist_wet:
+        if self.dist_wet or self.version >1:
             a_nc.plot(self.data_ts.data[column_wet], altitudeII, alpha = alpha)
             g = a_nc.get_lines()[-1]
             g.set_label(None)
             col2 = g.get_color()
-        if self.dist_dry:
+        if self.dist_dry or self.version >1:
             a_nc.plot(data_avg.data[column_dry] ,altitude_avg, label = 'dry', color = col1)
-        if self.dist_wet:
+        if self.dist_wet or self.version >1:
             a_nc.plot(data_avg.data[column_wet] ,altitude_avgII, label = 'wet', color = col2)
         a_nc.set_xlabel('NC (#/cm^3)')
         # a_nc.set_xlim(nc_lim)
@@ -1203,12 +1275,24 @@ class TBS_flight(object):
         if self.imet_raw:
             altitude = self.data_ts.data.Altitude_iMet
             altitude_avg = data_avg.data.Altitude_iMet
-            a_t.plot(self.data_ts.data['iMet_iMet air temperature (corrected) [deg C]'], altitude, label ='iMet', alpha = alpha)
+            a_t.plot(self.data_ts.data['iMet_iMet air temperature (corrected) [deg C]'], altitude, label ='_nolegend_', alpha = alpha, color = colors[0])
             g = a_t.get_lines()[-1]
-            col1 = g.get_color()
-            a_t.plot(data_avg.data['iMet_iMet air temperature (corrected) [deg C]'] ,altitude_avg, label = 'iMet', color = col1)
+            a_t.plot(data_avg.data['iMet_iMet air temperature (corrected) [deg C]'] ,altitude_avg, label = 'iMet', color = colors[0])
+
+        if self.sounding:
+            self.sounding.vertical_profile.drop_all_columns_but('Temp').plot(ax=a_t)
+            g = a_t.get_lines()[-1]
+            g.set_label('sound. {}'.format(self.sounding.launch_time_str))
+            g.set_color(colors[1])
+
+        if self.sounding_2nd:
+            self.sounding_2nd.vertical_profile.drop_all_columns_but('Temp').plot(ax=a_t)
+            g = a_t.get_lines()[-1]
+            g.set_label('sound. {}'.format(self.sounding_2nd.launch_time_str))
+            g.set_color(colors[1])
+            g.set_linestyle('--')
         a_t.set_xlabel('Temp (°C)')
-        # a_t.legend()
+        a_t.legend(loc = 2)
         # a_t.set_xlim(temp_lim)
         # a_t.set_ylim(alt_lim)
 
@@ -1217,11 +1301,25 @@ class TBS_flight(object):
             altitude = self.data_ts.data.Altitude_iMet
             altitude_avg = data_avg.data.Altitude_iMet
             col = 'iMet_iMet humidity [RH %]'
-            a_rh.plot(self.data_ts.data[col], altitude, label ='iMet', alpha = alpha)
+            a_rh.plot(self.data_ts.data[col], altitude, label ='_nolegend_', alpha = alpha, color = colors[0])
             g = a_t.get_lines()[-1]
-            col1 = g.get_color()
-            a_rh.plot(data_avg.data[col] ,altitude_avg, label = 'iMet', color = col1)
+            a_rh.plot(data_avg.data[col] ,altitude_avg, label = 'iMet', color = colors[0])
+
+        if self.sounding:
+            self.sounding.vertical_profile.drop_all_columns_but('RH').plot(ax=a_rh)
+            g = a_rh.get_lines()[-1]
+            g.set_label('sound.')
+            g.set_color(colors[1])
+
+        if self.sounding_2nd:
+            self.sounding_2nd.vertical_profile.drop_all_columns_but('RH').plot(ax=a_rh)
+            g = a_rh.get_lines()[-1]
+            g.set_label('sound.')
+            g.set_color(colors[1])
+            g.set_linestyle('--')
+
         a_rh.set_xlabel('RH (%)')
+        a_rh.legend(loc = 1)
         # a_rh.set_xlim(rh_lim)
 
     # mean diameter
@@ -1248,12 +1346,18 @@ class TBS_flight(object):
         # a_md.set_xlim(md_lim)
         a_md.legend()
 
+    # other stuff
         for at in a:
+            at.set_ylim(self.data_ts.data.Altitude_iMet.min(), self.data_ts.data.Altitude_iMet.max())
             scale = at.get_xscale()
             if scale == 'linear':
                 at.xaxis.set_major_locator(_MaxNLocator(prune='both', nbins=5))
             mtl = at.xaxis.get_majorticklabels()
             _plt.setp(mtl, rotation=45, ha='right')
+
+        for at in a[1:]:
+            at.set_ylabel('')
+
         f.tight_layout()
         f.patch.set_alpha(0)
         f.save = lambda: save_figure(self, f, 'plot_overview_vp_check')
@@ -1263,9 +1367,83 @@ class TBS_flight(object):
             at = a[0]
             st = self.data_ts.get_timespan()[0]
             txt = "{}{:02d}{:02d}".format(st.year, st.month, st.day)
-            at.text(0.05, 0.9, txt, transform=at.transAxes)
-
+            at.text(0.05, 0.8, txt, transform=at.transAxes)
         return f,a
+
+    def plot_instrument_intercomparison_nc(self, whichPOPSdata = 'raw'):
+        """
+
+        Parameters
+        ----------
+        whichPOPSdata: string (['raw', 'qc'])
+            which POPSdata to use, raw or quality controlled
+
+        Returns
+        -------
+
+        """
+        # mini = _np.array([self.dist_wet.bins.min(), self.dist_dry.bins.min(), self.dist_uhsas.bins.min()])
+        # maximin = mini[~ _np.isnan(mini)].max()
+        # maxi = _np.array([self.dist_wet.bins.max(), self.dist_dry.bins.max(), self.dist_uhsas.bins.max()])
+        # minimax = maxi[~ _np.isnan(maxi)].min()
+
+        f, a = _plt.subplots()
+
+        if whichPOPSdata == 'raw':
+            maximin = _np.nanmax(_np.array(
+                [dist.bins.min() if dist is not None else _np.nan for dist in
+                 [self.dist_wet, self.dist_dry, self.dist_uhsas]]))
+            minimax = _np.nanmin(_np.array(
+                [dist.bins.max() if dist is not None else _np.nan for dist in
+                 [self.dist_wet, self.dist_dry, self.dist_uhsas]]))
+            if self.dist_dry:
+                popsdry = self.dist_dry.zoom_diameter(maximin, minimax)
+                col = _plt.rcParams['axes.prop_cycle'].by_key()['color'][0]
+                popsdry.particle_number_concentration.plot(ax=a, label='POPS_dry', color = col)
+
+            if self.dist_wet:
+                popswet = self.dist_wet.zoom_diameter(maximin, minimax)
+                col = _plt.rcParams['axes.prop_cycle'].by_key()['color'][1]
+                popswet.particle_number_concentration.plot(ax=a, label='POPS_wet', color = col)
+
+        if whichPOPSdata == 'qc':
+            maximin = 140
+            minimax = 2500
+            col = _plt.rcParams['axes.prop_cycle'].by_key()['color'][0]
+            self.data_ts._del_all_columns_but('N_POPS1').plot(ax=a, label='POPS_dry', color=col)
+            col = _plt.rcParams['axes.prop_cycle'].by_key()['color'][1]
+            self.data_ts._del_all_columns_but('N_POPS2').plot(ax=a, label='POPS_wet', color=col)
+
+
+        if self.dist_uhsas:
+            uhsas = self.dist_uhsas.zoom_diameter(maximin, minimax)
+            col = _plt.rcParams['axes.prop_cycle'].by_key()['color'][2]
+            uhsas.particle_number_concentration.plot(ax=a, label='UHSAS', color = col)
+
+        a.legend()
+        a.set_xlabel('')
+        # a.xaxis.set_major_formatter(DateFormatter("%H:%M:%S"))
+
+        at = a.twinx()
+        col = _plt.rcParams['axes.prop_cycle'].by_key()['color'][5]
+        self.data_ts._del_all_columns_but('Altitude_iMet').plot(ax=at, color=col)
+        for lab in at.yaxis.get_ticklabels():
+            lab.set_color(col)
+
+        at.set_ylabel('Altitude (m)', color=col)
+        a.xaxis.set_major_formatter(_DateFormatter("%H:%M:%S"))
+        timestamp = True
+
+        if timestamp:
+            st = self.data_ts.get_timespan()[0]
+            txt = "{}{:02d}{:02d}".format(st.year, st.month, st.day)
+            a.text(0.05, 0.9, txt, transform=a.transAxes)
+
+        f.set_figheight(f.get_figheight() * 0.8)
+        f.tight_layout()
+        f.patch.set_alpha(0)
+        f.save = lambda x='instrument_interc_sdist_nc_ts': save_figure(self, f, x)
+        return f,a,at
 
     def plot_instrument_intercomparison(self, clim = (1e0, 5e2), show_dist_ts = True, show_nc = True, show_dist_avg = True):
         def plot_sdist_ts(uhsas, dist_dry, dist_wet, clim = (1e0, 5e2)):
@@ -1413,6 +1591,8 @@ class TBS_flight(object):
             return f, a
 
         def plot_sdist_avg(uhsas, dist_dry, dist_wet):
+            if _np.array([True if i else False for i in [self.dist_dry, self.dist_wet, self.dist_uhsas]]).sum() < 2:
+                raise ValueError('not much to compare!')
             avguh = uhsas.average_overAllTime()
             if dist_dry:
                 avgd = dist_dry.average_overAllTime()
@@ -1519,7 +1699,205 @@ class TBS_flight(object):
             axs.append(a)
         return fs, axs
 
+    def plot_POPS_rawVqc(self):
+        f, a = _plt.subplots(2, sharex=True, gridspec_kw={'hspace': 0})
+        ad, aw = a
 
+        self.data_ts._del_all_columns_but('N_POPS1').plot(ax=ad, label='qc')
+        if self.dist_dry:
+            self.dist_dry.particle_number_concentration.plot(ax=ad, label='raw')
+        leg = ad.legend()
+        leg.set_title('dry')
+
+        self.data_ts._del_all_columns_but('N_POPS2').plot(ax=aw, label='qc')
+        if self.dist_wet:
+            self.dist_wet.particle_number_concentration.plot(ax=aw, label='raw')
+        leg = aw.legend()
+        leg.set_title('wet')
+
+        #     ad.set_ylim(0,50)
+        #     aw.set_ylim(0,50)
+        return f,a
+
+    def plot_sounding(self):
+        colors = _plt.rcParams['axes.prop_cycle'].by_key()['color']
+        f, a = _plt.subplots(1, 3, sharey=True, gridspec_kw={'wspace': 0, 'width_ratios': [1,1, 2]})
+        asond, asond_w, aclouds = a
+        asondt = asond.twiny()
+        asondt_w = asond_w.twiny()
+
+    ######
+    # cloud
+        if self.sounding:
+            if (self.data_ts.get_timespan()[0] < self.sounding.launch_time) and  (self.data_ts.get_timespan()[1] > self.sounding.launch_time):
+                toi = [{'datetime': self.sounding.launch_time,
+                        'annotate': ('launch', 4000),
+                        'color': colors[2],
+                        'annotate_kwargs': {}}]
+            else:
+                toi = None
+
+            if self.sounding_2nd:
+                if (self.data_ts.get_timespan()[0] < self.sounding_2nd.launch_time) and  (self.data_ts.get_timespan()[1] > self.sounding_2nd.launch_time):
+                    toi2nd = [{'datetime': self.sounding_2nd.launch_time,
+                            'annotate': ('launch', 4000),
+                            'color': colors[2],
+                            'annotate_kwargs': {}}]
+                    if toi:
+                        toi += toi2nd
+                    else:
+                        toi = toi2nd
+        else:
+            toi = None
+
+        plot_on_clouds_flightpath(self, ax=aclouds, times_of_interest = toi)
+        aclouds.set_ylabel('')
+        asond_w.set_ylabel('')
+
+    ######
+    # sondings
+    ## RH & Temp
+        if self.sounding:
+            self.sounding.vertical_profile.drop_all_columns_but('RH').plot(ax=asond)
+
+            self.sounding.vertical_profile.drop_all_columns_but('Temp').plot(ax=asondt, color=colors[1])
+
+            maxmt = 5
+            asond.xaxis.set_major_locator(_MaxNLocator(maxmt, prune='both'))
+            asondt.xaxis.set_major_locator(_MaxNLocator(maxmt, prune='both'))
+
+            labels = ('RH (%)', 'Temp. (°C)')
+            for e, at in enumerate((asond, asondt)):
+                col = colors[e]
+                at.set_xlabel(labels[e], color=col)
+                tlabls = at.xaxis.get_ticklabels()
+                for tlab in tlabls:
+                    tlab.set_color(col)
+
+            h, l = asond.get_legend_handles_labels()
+            ht, lt = asondt.get_legend_handles_labels()
+
+            leg = asondt.legend(h + ht, l + lt, loc = 2)
+            ttxt = 'launch\ntime\n{}'.format(self.sounding.launch_time_str)
+            if self.sounding_2nd:
+                ttxt += '\n({})'.format(self.sounding_2nd.launch_time_str)
+            leg.set_title(ttxt)
+            legt = leg.get_title()
+            legt.set_fontsize('small')
+
+    ## Wind
+
+            self.sounding.vertical_profile.drop_all_columns_but('Wind_speed').plot(ax=asond_w, color = colors[2])
+            g = asond_w.get_lines()[-1]
+            g.set_label('Speed')
+            self.sounding.vertical_profile.drop_all_columns_but('Wind_direction').plot(ax=asondt_w, color=colors[3])
+            g = asondt_w.get_lines()[-1]
+            g.set_label('Direction')
+
+            maxmt = 5
+            asond_w.xaxis.set_major_locator(_MaxNLocator(maxmt, prune='both'))
+            # asondt_w.xaxis.set_major_locator(_MaxNLocator(maxmt, prune='both'))
+
+            asondt_w.xaxis.set_ticks([90,180,270])
+            asondt_w.xaxis.set_ticklabels(['E', 'S', 'W'])
+
+            labels = ('Speed (m/s)', 'Direction')
+            for e, at in enumerate((asond_w, asondt_w)):
+                col = colors[e+2]
+                at.set_xlabel(labels[e], color=col)
+                tlabls = at.xaxis.get_ticklabels()
+                for tlab in tlabls:
+                    tlab.set_color(col)
+
+            h, l = asond_w.get_legend_handles_labels()
+            ht, lt = asondt_w.get_legend_handles_labels()
+
+            leg = asondt_w.legend(h + ht, l + lt, loc=2)
+            leg.set_title('Wind')
+            legt = leg.get_title()
+            legt.set_fontsize('small')
+            asondt_w.set_xlim(0,360)
+
+    ######
+    # sondings 2nd
+    ## RH & Temp
+        if self.sounding_2nd:
+            self.sounding_2nd.vertical_profile.drop_all_columns_but('RH').plot(ax=asond, color=colors[0], ls = '--')
+            # asondt = asond.twiny()
+            self.sounding_2nd.vertical_profile.drop_all_columns_but('Temp').plot(ax=asondt, color=colors[1], ls = '--')
+
+            maxmt = 5
+            asond.xaxis.set_major_locator(_MaxNLocator(maxmt, prune='both'))
+            asondt.xaxis.set_major_locator(_MaxNLocator(maxmt, prune='both'))
+
+            labels = ('RH (%)', 'Temp. (°C)')
+            for e, at in enumerate((asond, asondt)):
+                col = colors[e]
+                at.set_xlabel(labels[e], color=col)
+                tlabls = at.xaxis.get_ticklabels()
+                for tlab in tlabls:
+                    tlab.set_color(col)
+
+            h, l = asond.get_legend_handles_labels()
+            ht, lt = asondt.get_legend_handles_labels()
+
+            # leg = asondt.legend(h + ht, l + lt, loc=2, fontsize = 'x-small')
+            # leg.set_title('launch\ntime\n{}'.format(self.sounding_2nd.launch_time_str))
+            # legt = leg.get_title()
+            # legt.set_fontsize('small')
+
+        ## Wind
+
+            self.sounding_2nd.vertical_profile.drop_all_columns_but('Wind_speed').plot(ax=asond_w, color=colors[2], ls = '--')
+            g = asond_w.get_lines()[-1]
+            g.set_label('Speed')
+            # asondt_w = asond_w.twiny()
+            self.sounding_2nd.vertical_profile.drop_all_columns_but('Wind_direction').plot(ax=asondt_w, color=colors[3], ls = '--')
+            g = asondt_w.get_lines()[-1]
+            g.set_label('Direction')
+
+            maxmt = 5
+            asond_w.xaxis.set_major_locator(_MaxNLocator(maxmt, prune='both'))
+            # asondt_w.xaxis.set_major_locator(_MaxNLocator(maxmt, prune='both'))
+
+            asondt_w.xaxis.set_ticks([90, 180, 270])
+            asondt_w.xaxis.set_ticklabels(['E', 'S', 'W'])
+
+            labels = ('Speed (m/s)', 'Direction')
+            for e, at in enumerate((asond_w, asondt_w)):
+                col = colors[e + 2]
+                at.set_xlabel(labels[e], color=col)
+                tlabls = at.xaxis.get_ticklabels()
+                for tlab in tlabls:
+                    tlab.set_color(col)
+
+            h, l = asond_w.get_legend_handles_labels()
+            ht, lt = asondt_w.get_legend_handles_labels()
+
+            # leg = asondt_w.legend(h + ht, l + lt, loc=2, fontsize = 'x-small', title = 'Wind')
+            # legt = leg.get_title()
+            # legt.set_fontsize('small')
+
+            asondt_w.set_xlim(0, 360)
+
+
+
+    ######
+    # other stuff
+
+        for at in a:
+            at.set_ylim(0, 5000)
+
+        if self.sounding:
+            min = self.sounding.vertical_profile.data[self.sounding.vertical_profile.data.index < 5000].Temp.min()
+            max = self.sounding.vertical_profile.data[self.sounding.vertical_profile.data.index < 5000].Temp.max()
+            asondt.set_xlim(min-1, max+1)
+
+
+        f.save = lambda x='sounding': save_figure(self, f, x)
+        f.patch.set_alpha(0)
+        f.tight_layout()
+        return f,((asond, asondt), (asond_w, asondt_w), aclouds)
 
 
 
@@ -1530,12 +1908,15 @@ class TBS_flight(object):
                             fname_ceilometer = None, #'/Volumes/HTelg_4TB_Backup/arm_data/OLI/ceilometer/oliceilM1.b1.20170523.000009.nc',
                             fname_kazr = None,
                             fname_uhsas = None,
+                            fname_sonde = None,
                             pops_dry_pos_rel2iMet=0,
                             pops_wet_pos_rel2iMet=0,
                             cpc_pos_rel2iMet=0,
-                            remove_artefacts = None):
+                            remove_artefacts = None,
+                            version = 1):
 
         """This is data that has been preprocessed by Fan"""
+        self.version = version
         self.imet_raw = True
         self.data_ts = read_tbs_qc(fname_tbs)
         self.data_ts.data['Altitude_iMet'] = self.data_ts.data['Alt'] * 1000
@@ -1543,19 +1924,30 @@ class TBS_flight(object):
             _ = self.data_ts.remove_artefacts('Altitude_iMet', inplace=True)
             self.data_ts.data.loc[self.data_ts.data['Altitude_iMet'] > remove_artefacts, ['Altitude_iMet']] = _np.nan
 
-        self.data_ts.data['iMet_iMet humidity [RH %]'] = _np.nan
+        if 'RH' in self.data_ts.data.columns:
+            self.data_ts.data['iMet_iMet humidity [RH %]'] = self.data_ts.data.RH
+        else:
+            self.data_ts.data['iMet_iMet humidity [RH %]'] = _np.nan
         self.data_ts.data['iMet_iMet air temperature (corrected) [deg C]'] = self.data_ts.data['ImetT']
         # self.data_ts.data['POPSdry_PartCon_fromsizedist'] = self.data_ts.data['NPOPS1']
         # self.data_ts.data['POPSwet_PartCon_fromsizedist'] = self.data_ts.data['NPOPS2']
         self.cpc_raw = True
-        self.data_ts.data['CPC_Concentration (#/cm³)'] = self.data_ts.data['NCPC']
+
+        if version == 1:
+            self.data_ts.data['CPC_Concentration (#/cm³)'] = self.data_ts.data['NCPC']
+            self.data_ts.data['POPSdry_Temp'] = self.data_ts.data['POPS1T']
+            self.data_ts.data['POPSwet_Temp'] = self.data_ts.data['POPS2T']
+
+        elif version == 2:
+            self.data_ts.data['CPC_Concentration (#/cm³)'] = self.data_ts.data['N_CPC']
+            self.data_ts.data['POPSdry_Temp'] = self.data_ts.data['POPS1_T']
+            self.data_ts.data['POPSwet_Temp'] = self.data_ts.data['POPS2_T']
+
         self.data_ts.data['POPSdry_Altitude'] = self.data_ts.data['Altitude_iMet'] + pops_dry_pos_rel2iMet #originally that would the altitude measured by POPS not derived from the iMET!!!!
         self.data_ts.data['POPSwet_Altitude'] = self.data_ts.data['Altitude_iMet'] + pops_wet_pos_rel2iMet #originally that would the altitude measured by POPS not derived from the iMET!!!!
         self.data_ts.data['Altitude_POPSdry'] = self.data_ts.data['POPSdry_Altitude']
         self.data_ts.data['Altitude_POPSwet'] = self.data_ts.data['POPSwet_Altitude']
         self.data_ts.data['Altitude_CPC'] = self.data_ts.data['Altitude_iMet'] + cpc_pos_rel2iMet
-        self.data_ts.data['POPSdry_Temp'] = self.data_ts.data['POPS1T']
-        self.data_ts.data['POPSwet_Temp'] = self.data_ts.data['POPS2T']
 
 
 
@@ -1577,11 +1969,20 @@ class TBS_flight(object):
             self.ceilometer = arm.read_ceilometer_nc(fname_ceilometer)
             ts = self.data_ts.get_timespan()
             self.ceilometer = self.ceilometer.zoom_time(ts[0], ts[1])
+        else:
+            self.ceilometer = None
 
         if fname_kazr:
             self.kazr = arm.read_kazr_nc(fname_kazr)
             ts = self.data_ts.get_timespan()
             self.kazr = self.kazr.zoom_time(ts[0], ts[1])
+            if self.kazr.reflectivity.data.shape[0] == 0:
+                self.kazr = None
+            else:
+                self.kazr = self.kazr.discriminate_by_signal2noise_ratio(10)
+                self.kazr = self.kazr.average_time((1, 'm'))
+        else:
+            self.kazr = None
 
         if fname_uhsas:
             self.dist_uhsas = arm.read_uhsas(fname_uhsas)
@@ -1589,6 +1990,26 @@ class TBS_flight(object):
             self.dist_uhsas = self.dist_uhsas.zoom_time(ts[0], ts[1])
         else:
             self.dist_uhsas = None
+
+        fname_sondeII = None
+        if fname_sonde:
+            if isinstance(fname_sonde, (_np.ndarray, list, tuple)):
+                fname_sonde, fname_sondeII = fname_sonde
+
+            self.sounding = arm.read_sonding(fname_sonde)
+            st = self.sounding.timeseries.data.index.min()
+            self.sounding.launch_time = st
+            self.sounding.launch_time_str = '{:02d}:{:02d}:{:02d}'.format(st.hour, st.minute, st.second)
+        else:
+            self.sounding = None
+
+        if fname_sondeII:
+            self.sounding_2nd = arm.read_sonding(fname_sondeII)
+            st = self.sounding_2nd.timeseries.data.index.min()
+            self.sounding_2nd.launch_time = st
+            self.sounding_2nd.launch_time_str = '{:02d}:{:02d}:{:02d}'.format(st.hour, st.minute, st.second)
+        else:
+            self.sounding_2nd = None
 
     def read_flight_data_raw(self,
                              fname_pops_dry=None,
@@ -1599,6 +2020,7 @@ class TBS_flight(object):
                              fname_ceilometer = None,
                              fname_uhsas=None,
                              fname_kazr = None,
+                             fname_sonde = None,
                              pops_dry_t_offset=None,
                              pops_wet_t_offset=None,
                              pops_dry_pos_rel2iMet=None,
@@ -1721,7 +2143,28 @@ class TBS_flight(object):
             self.kazr = arm.read_kazr_nc(fname_kazr)
             ts = self.data_ts.get_timespan()
             self.kazr = self.kazr.zoom_time(ts[0], ts[1])
+            self.kazr = self.kazr.discriminate_by_signal2noise_ratio(10)
+            self.kazr = self.kazr.average_time((1, 'm'))
         else:
             self.kazr = None
 
+        fname_sondeII = None
+        if fname_sonde:
+            if isinstance(fname_sonde, (_np.ndarray, list, tuple)):
+                fname_sonde, fname_sondeII = fname_sonde
+
+            self.sounding = arm.read_sonding(fname_sonde)
+            st = self.sounding.timeseries.data.index.min()
+            self.sounding.launch_time = st
+            self.sounding.launch_time_str = '{:02d}:{:02d}:{:02d}'.format(st.hour, st.minute, st.second)
+        else:
+            self.sounding = None
+
+        if fname_sondeII:
+            self.sounding_2nd = arm.read_sonding(fname_sondeII)
+            st = self.sounding_2nd.timeseries.data.index.min()
+            self.sounding_2nd.launch_time = st
+            self.sounding_2nd.launch_time_str = '{:02d}:{:02d}:{:02d}'.format(st.hour, st.minute, st.second)
+        else:
+            self.sounding_2nd = None
 
