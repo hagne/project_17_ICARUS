@@ -1,5 +1,6 @@
 import pandas as _pd
 import numpy as _np
+import xarray as _xr
 import matplotlib.pylab as _plt
 # import os
 import atmPy.aerosols.size_distribution.sizedistribution as _sd
@@ -15,6 +16,13 @@ import atmPy.data_archives.arm as arm
 import plt_tools as _plt_tools
 import warnings as _warnings
 
+
+def _add_UHSAS2data(tbs, maximin = 130, minimax = 2500):
+    if tbs.dist_uhsas:
+        uhsas = tbs.dist_uhsas.zoom_diameter(maximin, minimax)
+        pnc = uhsas.particle_number_concentration
+        pnc.data.index = [min(tbs.data_ts.data.index, key = lambda x: abs(x - uidx)) for uidx in pnc.data.index]
+        tbs.data_ts.data['NC_UHSAS'] = pnc.data
 
 def read_pops_raw(fname, bin_edges):
     if type(fname).__name__ == 'str':
@@ -117,10 +125,18 @@ def read_cpc(fname, skiprows=17):
     data = _timeseries.TimeSeries(data, sampling_period=1)
     return data
 
-def save_figure(tbs,f, name_base):
+def save_figure(tbs,f, name_base, test = False):
     st = tbs.data_ts.get_timespan()[0]
     ts = "{}{:02d}{:02d}".format(st.year, st.month, st.day)
-    f.savefig('/Users/htelg/projecte/17_ICARUS_aerosol_cloud_interaction/all_flights_figures/{}_{}.png'.format(name_base,ts))
+    if tbs._section != 'all':
+        sect= '_{}'.format(tbs._section)
+    else:
+        sect = ''
+    fname = '/Users/htelg/projecte/17_ICARUS_aerosol_cloud_interaction/all_flights_figures/{}_{}{}.png'.format(name_base,ts, sect)
+    if test:
+        print(fname)
+    else:
+        f.savefig(fname)
 
 def plot_on_clouds(tbs, cpc = True, relative_humidity = True, cloudbase = True, timestamp = True, altitude_column = 'Altitude_iMet', which_pops = 'wet', which_pops_data = 'raw', cloud_vmin = 1e2, linewidth = 3.5):
     """
@@ -377,6 +393,8 @@ def plot_on_clouds_flightpath(tbs, cloud_vmin = 100, altitude_column = 'Altitude
             at = a
             st = tbs.data_ts.get_timespan()[0]
             txt = "{}{:02d}{:02d}".format(st.year, st.month, st.day)
+            if tbs._section != 'all':
+                txt += '_{}'.format(tbs._section)
             at.text(0.05, 0.9, txt, transform=at.transAxes)
         f.save = lambda: save_figure(tbs, f, 'plot_on_clouds_flightpath')
 
@@ -390,6 +408,7 @@ class Sections(object):
 #         super().__init__(sections)
         self._parent = parent
         self._sections = None
+        self._sections_inst = None # section tbs instances
 
     @property
     def sections_dict(self):
@@ -401,7 +420,11 @@ class Sections(object):
         self._sections = sections
         self._split_into_sections()
 
+    def clear(self):
+        self._parent.sections = Sections(self._parent)
+
     def _split_into_sections(self):
+        self._sections_inst = {}
         for sec in self._sections.keys():
             zt = self._sections[sec]
             sec_data = self._parent.data_ts.zoom_time(zt[0], zt[1])
@@ -429,7 +452,36 @@ class Sections(object):
                     dist_uhsas = None
             else:
                 dist_uhsas = None
-            setattr(self, sec, TBS_flight(data_ts = sec_data, dist_dry = dist_dry, dist_wet = dist_wet, dist_uhsas = dist_uhsas))
+
+            if self._parent.ceilometer:
+                try:
+                    ceilometer = self._parent.ceilometer.zoom_time(zt[0], zt[1])
+                except IndexError:
+                    ceilometer = None
+            else:
+                dist_dry = None
+
+            if self._parent.kazr:
+                try:
+                    kazr = self._parent.kazr.zoom_time(zt[0], zt[1])
+                except IndexError:
+                    kazr = None
+            else:
+                dist_dry = None
+
+            # create the sections
+            sect_inst = TBS_flight(data_ts=sec_data,
+                           dist_dry=dist_dry,
+                           dist_wet=dist_wet,
+                           dist_uhsas=dist_uhsas,
+                           ceilometer=ceilometer,
+                           kazr=kazr,
+                           sounding=self._parent.sounding,
+                           sounding_2nd=self._parent.sounding_2nd,
+                           parent=self,
+                           section=sec)
+            setattr(self, sec, sect_inst)
+            self._sections_inst[sec] = sect_inst
 
     def plot(self, show_clouds = True, exclude = [], altitude_column = 'Altitude_iMet', timestamp = True):
         f, a = _plt.subplots()
@@ -439,7 +491,7 @@ class Sections(object):
 
         for e,att in enumerate(dir(self)):
             zo = e + 10
-            if att[0] == '_' or att in ['sections_dict','plot', 'plot_avg_sd']:
+            if att[0] == '_' or att in ['sections_dict','plot', 'plot_avg_sd', 'clear']:
                 continue
             if att in exclude:
                 continue
@@ -553,7 +605,10 @@ class TBS_flight(object):
     - convert to vertical profiles
     """
 
-    def __init__(self, data_ts = None, dist_dry = None, dist_wet = None, dist_uhsas = None):
+    def __init__(self, data_ts = None, dist_dry = None, dist_wet = None,
+                 dist_uhsas = None, ceilometer = None, kazr = None, sounding = None, sounding_2nd = None, parent = None, section = 'all'):
+        self._parent = parent
+        self._section = section
         self.data_ts = data_ts
         if data_ts:
             if len([col for col in data_ts.data.columns if 'CPC_' in col]) > 0:
@@ -568,11 +623,16 @@ class TBS_flight(object):
         self.dist_dry = dist_dry
         self.dist_wet = dist_wet
         self.dist_uhsas = dist_uhsas
+        self.ceilometer = ceilometer
+        self.kazr = kazr
+        self.sounding = sounding
+        self.sounding_2nd = sounding_2nd
         self.data_vp = None
         self.sections = Sections(self)
         self._resolution = None
         self._std = None
         self.version = 1 # 1 for early work will be changed accordingly in newer versions when data is loaded
+
 
 
     # @property
@@ -601,7 +661,124 @@ class TBS_flight(object):
             dist.data.index = dist.data.index + _np.timedelta64(offset_t[0], offset_t[1])
         return
 
+    def analize_NCdeviationaloft(self,
+                                 groundlayerheight=20,
+                                 resolution=10,
+                                 which_pops = None,
+                                 fname='/Users/htelg/projecte/17_ICARUS_aerosol_cloud_interaction/NCdeviationaloft.nc',
+                                 plot = True,
+                                 verbose=True,
+                                 test=False,
+                                 startover=False
+                                 ):
+        overwrite = startover
 
+        # get the date of the 'all' flight
+        flt = self
+        selt = flt._section
+        while selt != 'all':
+            flt = self._parent._parent
+            selt = flt._section
+        st = flt.data_ts.get_timespan()[0]
+        year = st.year
+        year = 2018
+        day = "{}{:02d}{:02d}".format(year, st.month, st.day)
+
+        def df2da(df):
+            data = _np.ones((1, 1, 20, 2))
+            data[0, 0] = df.values
+
+            coords = {'day': [day], 'section': [self._section], 'tolerances': tolerances,
+                      'values': ['altitude', 'dNC_rel']}
+            da = _xr.DataArray(data,
+                              coords=coords,
+                              dims=['day', 'section', 'tolerances', 'values']
+                              )
+            return da
+
+        # creat vertical profile and get rid of very bottom to avoid impact from car exhaust
+        self.create_vertical_profile(resolution=resolution, std=True)
+        vp_data = self.data_vp.data.truncate(before=groundlayerheight)
+        vp_data_std = self.data_vp_std.data.truncate(before=groundlayerheight)
+
+        # Get deviation of NC aloft versus ground
+        if which_pops == 'dry':
+            colname = 'POPSdry_PartCon_fromsizedist'
+            colname_alt = 'N_POPS1'
+
+        elif which_pops == 'wet':
+            colname = 'POPSwet_PartCon_fromsizedist'
+            colname_alt = 'N_POPS2'
+
+        else:
+            raise ValueError('which_POPS has to be specified')
+
+        if colname not in vp_data.columns:
+            print('use alternative column')
+            colname = colname_alt
+        ground_concentration = vp_data[colname].iloc[0]
+        dNC_abs = _np.sqrt((vp_data[colname] - ground_concentration) ** 2)
+        dNC_rel = dNC_abs / ground_concentration
+
+        # Where is the deviation equal to noise
+        bla = vp_data_std[colname] - dNC_abs
+        out = {}
+        for e, i in enumerate(bla):
+            if i < 0:
+                out['altitude'] = bla.index[e]
+                out['dNC_rel'] = dNC_rel.iloc[e]
+                out['dNC_abs'] = dNC_abs.iloc[e]
+                out['NC_ground'] = ground_concentration
+                break
+
+        # Maximum hight with deviation below tolerance
+        tolerances = _np.linspace(0, 1, 21)[1:]
+        df = _pd.DataFrame(index=tolerances, columns=['altitude', 'dNC_rel'], dtype=float)
+        for e, i in enumerate(tolerances):
+            idx = (dNC_rel.values < i).argmin() - 1
+            df.loc[i, 'dNC_rel'] = dNC_rel.iloc[idx]
+            df.loc[i, 'altitude'] = dNC_rel.index[idx]
+
+        daconcat = False
+        if overwrite:
+            da = df2da(df)
+            # da.to_netcdf(fname)
+            # return da, df
+
+        else:
+            da = _xr.open_dataarray(fname, autoclose=True)
+
+            # change xarray.Dataarray
+
+            if day in da.day.values:
+                if self._section in da.section.values:
+
+                    # coordinate exists overwrite data
+                    if verbose:
+                        print('coordinate exists ... overwrite')
+                        #             df[:] = 1
+                    da.loc[day, self._section] = df.values
+                else:
+                    # add coordinate to section by concatinating
+                    if verbose:
+                        print('new coordinate added to section')
+                    dat = df2da(df)
+                    daconcat = _xr.concat([da, dat], dim='section')
+            else:
+                if verbose:
+                    print('new coordinate added to day')
+                dat = df2da(df)
+                daconcat = _xr.concat([da, dat], dim='day')
+
+        if not test:
+            if type(daconcat) != bool:
+                #             daconcat.to_netcdf(fname)
+                da = daconcat
+            da.to_netcdf(fname)
+            da.attrs['deviation_equal2noise'] = out
+        if plot:
+            df.altitude.plot()
+        return da, df
 
 
     def align_and_merge(self,
@@ -714,7 +891,7 @@ class TBS_flight(object):
             min_alt = min([self.data_ts.data[ac].min() for ac in alt_cols])
             max_alt = max([self.data_ts.data[ac].max() for ac in alt_cols])
 
-            instruments = ['POPSdry', 'POPSwet', 'iMet', 'CPC']
+            instruments = ['POPSdry', 'POPSwet', 'iMet', 'CPC', 'POPS1', 'POPS2', 'NC_UHSAS']
             vplist = []
             stdlist = []
             alt_min = 1e10
@@ -722,6 +899,8 @@ class TBS_flight(object):
 
             for inst in instruments:
                 colt = [col for col in self.data_ts.data.columns if inst in col]
+                if inst in ['POPS1', 'POPS2', 'NC_UHSAS']:
+                    colt.append('Altitude_iMet')
                 datat = self.data_ts._del_all_columns_but(colt)
                 alt_coll = [col for col in datat.data.columns if 'Altitude_' in col]
                 if len(alt_coll) != 1:
@@ -746,13 +925,14 @@ class TBS_flight(object):
                 std = std.merge(stdt)
 
             self.data_vp_std = std
+
             try:
                 self.dist_wet_vp = self.dist_wet.convert2verticalprofile(layer_thickness=resolution)
-            except AttributeError or ValueError:
+            except (AttributeError, ValueError):
                 self.dist_wet_vp = None
             try:
                 self.dist_dry_vp = self.dist_dry.convert2verticalprofile(layer_thickness=resolution)
-            except AttributeError or ValueError:
+            except (AttributeError, ValueError):
                 self.dist_dry_vp = None
 
 
@@ -1195,6 +1375,264 @@ class TBS_flight(object):
             at.text(0.05, 0.9, txt, transform=at.transAxes)
         return f, (a_t,a_rh,a_nc,a_md,a_cpc)
 
+    def plot_overview_vpII(self, resolution=100,
+                           show_std = False,
+                           which_pops = 'both',
+                           scale_uhsas = 1,
+                           fighwidthscale = 1.5
+                           ):
+        """
+
+        Parameters
+        ----------
+        resolution
+        show_std
+        which_pops: ['both'], 'wet', 'dry
+        scale_uhsas: float
+            When UHSAS and POPS have an off-set for one or the other reason.
+        fighwidthscale
+
+        Returns
+        -------
+        a_fp,a_t,a_rh,a_nc,a_cpc
+        """
+
+
+        def plot_ibx(alt, mean, std, scale, a, col):
+            low = mean - std
+            high = mean + std
+            if scale == 'log':
+                low[low <= 0] = low[low > 0].min()
+            a.fill_betweenx(alt, low, high, color = col, alpha = 0.3)
+
+        self.groundVcloud_alalysis = {}
+        self.groundVcloud_alalysis['valid_flight'] = True
+        self.create_vertical_profile(resolution)
+        colors = _plt.rcParams['axes.prop_cycle'].by_key()['color']
+        f ,a = _plt.subplots(1, 5, sharey=True, gridspec_kw={'wspace': 0})
+        f.set_figwidth(f.get_figwidth() * fighwidthscale)
+        #     a_alt = a[0]
+
+        a_fp = a[0]
+        a_t = a[1]
+        a_rh = a[2]
+        a_nc = a[3]
+        a_cpc = a[4]
+
+        # at = a[2]
+        # at.set_title('Overview vertical profile')
+
+        alt_data = self.data_vp.data.index
+
+    # on clouds
+        self.plot_on_clouds_flightpath(ax = a_fp)
+        l = a_fp.get_lines()[-1]
+        l.set_markeredgewidth(2)
+        l.set_markersize(5)
+
+    # CPC
+        if 1:
+            if self.cpc_raw:
+                coll = 'CPC_Concentration (#/cm³)'
+                # alt_coll = 'Altitude_CPC'
+                a_cpc.plot(self.data_vp.data[coll], alt_data, label = 'dry')
+                g = a_cpc.get_lines()[-1]
+                col = g.get_color()
+
+                if show_std:
+                    plot_ibx(alt_data, self.data_vp.data[coll], self.data_vp_std.data[coll],'log', a_cpc, col)
+                    # a_cpc.fill_betweenx(alt_data.values, (self.data_vp.data[coll] - self.data_vp_std.data[coll]).values,
+                    #                    (self.data_vp.data[coll] + self.data_vp_std.data[coll]).values, color = col, alpha = 0.3)
+
+            # a_cpc.set_xlim(cpc_lim)
+            a_cpc.set_xlabel('CPC (#/cm^3)')
+            a_cpc.set_xscale('log')
+
+
+    # particle number
+    #     coll = 'POPSdry_PartCon'
+        if 1:
+            if self.dist_dry and which_pops in ['dry', 'both']:
+                coll = 'POPSdry_PartCon_fromsizedist'
+                # alt_coll = 'Altitude_POPSdry'
+                a_nc.plot(self.data_vp.data[coll], alt_data, label = 'dry')
+                g = a_nc.get_lines()[-1]
+                col = g.get_color()
+                self.groundVcloud_alalysis['nc_pops_vp'] = self.data_vp.data[coll]
+
+                if show_std:
+                    plot_ibx(alt_data, self.data_vp.data[coll], self.data_vp_std.data[coll], 'linear', a_nc, col)
+                    self.groundVcloud_alalysis['nc_pops_vp_std'] = self.data_vp_std.data[coll]
+            if self.dist_wet and which_pops in ['wet', 'both']:
+                # coll = 'POPSwet_PartCon'
+                coll = 'POPSwet_PartCon_fromsizedist'
+                # alt_coll = 'Altitude_POPSwet'
+                a_nc.plot(self.data_vp.data[coll], alt_data, label = 'wet')
+                g = a_nc.get_lines()[-1]
+                col = g.get_color()
+                self.groundVcloud_alalysis['nc_pops_vp'] = self.data_vp.data[coll]
+
+                if show_std:
+                    plot_ibx(alt_data, self.data_vp.data[coll], self.data_vp_std.data[coll], 'linear', a_nc, col)
+                    self.groundVcloud_alalysis['nc_pops_vp_std'] = self.data_vp_std.data[coll]
+
+            ncuhsas = self.data_vp.drop_all_columns_but('NC_UHSAS')
+            ncuhsas.data *= scale_uhsas
+
+            ncuhsas.plot(ax=a_nc, color = colors[2])
+            g = a_nc.get_lines()[-1]
+            g.set_label('UHSAS x {}'.format(scale_uhsas))
+            self.groundVcloud_alalysis['nc_uhsas_vp'] = ncuhsas
+            if show_std:
+                ncuhsas_std = self.data_vp_std.drop_all_columns_but('NC_UHSAS')
+                ncuhsas_std.data *= scale_uhsas
+                plot_ibx(alt_data, ncuhsas.data.iloc[:,0], ncuhsas_std.data.iloc[:,0], 'linear', a_nc, colors[2])
+
+            a_nc.set_xlabel('NC (#/cm^3)')
+            a_nc.legend()
+
+    # temperatur
+        if 1:
+            coll = 'iMet_iMet air temperature (corrected) [deg C]'
+            # alt_coll = 'Altitude_iMet'
+            a_t.plot(self.data_vp.data[coll], alt_data)
+            g = a_t.get_lines()[-1]
+            col = g.get_color()
+            g.set_label('iMet')
+
+            if show_std:
+                a_t.fill_betweenx(alt_data.values, (self.data_vp.data[coll] - self.data_vp_std.data[coll]).values,
+                                   (self.data_vp.data[coll] + self.data_vp_std.data[coll]).values, color = col, alpha = 0.3)
+
+            a_t.set_xlabel('Temp (°C)')
+            # a_t.legend()
+            # a_t.set_xlim(temp_lim)
+            # a_t.set_ylim(alt_lim)
+
+            if self.sounding:
+                self.sounding.vertical_profile.drop_all_columns_but('Temp').plot(ax=a_t)
+                g = a_t.get_lines()[-1]
+                g.set_label('sound. {}'.format(self.sounding.launch_time_str))
+                g.set_color(colors[1])
+
+            if self.sounding_2nd:
+                self.sounding_2nd.vertical_profile.drop_all_columns_but('Temp').plot(ax=a_t)
+                g = a_t.get_lines()[-1]
+                g.set_label('sound. {}'.format(self.sounding_2nd.launch_time_str))
+                g.set_color(colors[1])
+                g.set_linestyle('--')
+
+            if (~ _np.isnan(self.data_vp.data['iMet_iMet air temperature (corrected) [deg C]'])).sum() != 0:
+                mint = self.data_vp.data['iMet_iMet air temperature (corrected) [deg C]'].min()
+                maxt = self.data_vp.data['iMet_iMet air temperature (corrected) [deg C]'].max()
+                d = (maxt - mint) * 0.15
+                mint -= d
+                maxt += d
+                a_t.set_xlim(mint, maxt)
+            a_t.legend()
+
+    # RH
+            coll = 'iMet_iMet humidity [RH %]'
+            # alt_coll = 'Altitude_iMet'
+            a_rh.plot(self.data_vp.data[coll], alt_data)
+            g = a_rh.get_lines()[-1]
+            col = g.get_color()
+            g.set_label('iMet')
+
+            if show_std:
+                a_rh.fill_betweenx(alt_data.values, (self.data_vp.data[coll] - self.data_vp_std.data[coll]).values,
+                                   (self.data_vp.data[coll] + self.data_vp_std.data[coll]).values, color = col, alpha = 0.3)
+
+            if self.sounding:
+                self.sounding.vertical_profile.drop_all_columns_but('RH').plot(ax=a_rh)
+                g = a_rh.get_lines()[-1]
+                g.set_label('sound.')
+                g.set_color(colors[1])
+
+            if self.sounding_2nd:
+                self.sounding_2nd.vertical_profile.drop_all_columns_but('RH').plot(ax=a_rh)
+                g = a_rh.get_lines()[-1]
+                g.set_label('sound.')
+                g.set_color(colors[1])
+                g.set_linestyle('--')
+
+            if (~ _np.isnan(self.data_vp.data['iMet_iMet humidity [RH %]'])).sum() != 0:
+                mint = self.data_vp.data['iMet_iMet humidity [RH %]'].min()
+                maxt = self.data_vp.data['iMet_iMet humidity [RH %]'].max()
+                d = (maxt - mint) * 0.15
+                mint -= d
+                maxt += d
+                a_rh.set_xlim(mint, maxt)
+
+            a_rh.set_xlabel('RH (%)')
+            a_rh.legend()
+            # a_rh.set_xlim(rh_lim)
+
+    # other stuff
+        a[0].set_ylabel('Altitude (m)')
+        for at in a[1:]:
+            at.set_ylabel('')
+
+        for at in a:
+            scale = at.get_xscale()
+            if scale == 'linear':
+                at.xaxis.set_major_locator(_MaxNLocator(prune='both', nbins=5))
+            mtl = at.xaxis.get_majorticklabels()
+            _plt.setp(mtl, rotation=45, ha='right')
+            # print(self.data_vp.data.index.min(), self.data_vp.data.index.max())
+            at.set_ylim(self.data_vp.data.index.min(), self.data_vp.data.index.max())
+
+        # plot cloud info
+        # cloud analysis ... should be done somewhere different
+        fcb = self.ceilometer.cloudbase._del_all_columns_but('First_cloud_base')
+        alt = self.data_ts._del_all_columns_but('Altitude_iMet')
+        diff = ((fcb - alt) * (fcb - alt))  # .data.min()
+        idx = diff.data.idxmin()
+        cb_at_trans = alt.data.loc[idx].values[0][0]
+        self.groundVcloud_alalysis['cloud_base'] = cb_at_trans
+        self.groundVcloud_alalysis['cloud_base_rng_min'] =  fcb.data.min().values[0]
+        self.groundVcloud_alalysis['cloud_base_rng_max'] =  fcb.data.max().values[0]
+        for at in a[1:]:
+            at.axhline(cb_at_trans, color='0.5', zorder=0)
+            at.axhspan(fcb.data.min(), fcb.data.max(), zorder=0, color='0', alpha=0.1)
+
+        self.groundVcloud_alalysis['nc_pops_ground'] = self.groundVcloud_alalysis['nc_pops_vp'].iloc[0]
+        vp = self.groundVcloud_alalysis['nc_pops_vp']
+        cb = self.groundVcloud_alalysis['cloud_base']
+
+        self.groundVcloud_alalysis['nc_pops_below_cb'] = vp[(vp.index - cb) < 0].iloc[-1]
+
+        kzar_base = _timeseries.TimeSeries(_pd.DataFrame(_pd.Series(
+            {i: self.kazr.reflectivity.data.loc[i, :].dropna().index[0] for i in self.kazr.reflectivity.data.index}),
+                                                       columns=['kzar_base']))
+        alt = self.data_ts._del_all_columns_but('Altitude_iMet')
+
+        diff = (kzar_base - alt) * (kzar_base - alt)  # .data.min()
+        idx = diff.data.idxmin()
+        kzar_at_trans = alt.data.loc[idx].values[0][0]
+        self.groundVcloud_alalysis['kzar_base'] = kzar_at_trans
+        self.groundVcloud_alalysis['kzar_base_rng_min'] = kzar_base.data.min().values[0]
+        self.groundVcloud_alalysis['kzar_base_rng_max'] = kzar_base.data.max().values[0]
+        self.groundVcloud_alalysis['nc_pops_below_kb'] = vp[(vp.index - kzar_at_trans) < 0].iloc[-1]
+
+        f.tight_layout()
+        f.patch.set_alpha(0)
+        f.save = lambda: save_figure(self, f, 'plot_overview_vp')
+
+
+        timestamp = False
+        if timestamp:
+            at = a[0]
+            st = self.data_ts.get_timespan()[0]
+            txt = "{}{:02d}{:02d}".format(st.year, st.month, st.day)
+            if self._section != 'all':
+                txt += '_{}'.format(self._section)
+                # print('not all ... {}'.format(txt))
+            # else:
+            #     print('buba: {}'.format(self._section))
+            at.text(0.05, 0.9, txt, transform=at.transAxes)
+
+        return f, (a_fp, a_t,a_rh,a_nc,a_cpc)
 
     def plot_overview_vp_check(self,
                          # cpc_scale = 'log',
@@ -1980,7 +2418,7 @@ class TBS_flight(object):
                 self.kazr = None
             else:
                 self.kazr = self.kazr.discriminate_by_signal2noise_ratio(10)
-                self.kazr = self.kazr.average_time((1, 'm'))
+                self.kazr = self.kazr.average_time((10, 's'))
         else:
             self.kazr = None
 
@@ -1988,6 +2426,7 @@ class TBS_flight(object):
             self.dist_uhsas = arm.read_uhsas(fname_uhsas)
             ts = self.data_ts.get_timespan()
             self.dist_uhsas = self.dist_uhsas.zoom_time(ts[0], ts[1])
+            _add_UHSAS2data(self)
         else:
             self.dist_uhsas = None
 
@@ -2136,6 +2575,7 @@ class TBS_flight(object):
             self.dist_uhsas = arm.read_uhsas(fname_uhsas)
             ts = self.data_ts.get_timespan()
             self.dist_uhsas = self.dist_uhsas.zoom_time(ts[0], ts[1])
+            _add_UHSAS2data(self)
         else:
             self.dist_uhsas = None
 
@@ -2144,7 +2584,7 @@ class TBS_flight(object):
             ts = self.data_ts.get_timespan()
             self.kazr = self.kazr.zoom_time(ts[0], ts[1])
             self.kazr = self.kazr.discriminate_by_signal2noise_ratio(10)
-            self.kazr = self.kazr.average_time((1, 'm'))
+            self.kazr = self.kazr.average_time((10, 's'))
         else:
             self.kazr = None
 
